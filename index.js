@@ -3,6 +3,8 @@ const { conn, semillaSiEstaVacia } = require('./src/db.js');
 // Migración 001: agrega las columnas de Steam a las tablas que ya existían
 // (sequelize.sync() crea tablas, pero no agrega columnas).
 const migrarSteam = require('./src/migrations/001_steam_sync');
+// Migración 002: columnas del rating oficial de Steam (score 0-10 + veredicto).
+const migrarRating = require('./src/migrations/002_steam_rating');
 // Tablero de sincronización (ofertas 12h · catálogo diario · full semanal).
 // Sólo se prende si STEAM_SYNC_ENABLED=true.
 const steamScheduler = require('./src/services/steam/scheduler');
@@ -21,6 +23,7 @@ const steamScheduler = require('./src/services/steam/scheduler');
 conn
   .sync({ force: false })
   .then(() => migrarSteam.run(conn))
+  .then(() => migrarRating.run(conn))
   .then(() => {
     server.listen(process.env.PORT, () => {
       console.log('%s listening at ' + process.env.PORT); // eslint-disable-line no-console

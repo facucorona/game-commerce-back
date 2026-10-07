@@ -256,7 +256,18 @@ async function sincronizarUnJuego(appid, { maxScreenshots = 5, M = modelos(), ta
   const data = await client.appDetails(appid);
   if (!data) return { estado: 'omitido' };
 
-  const mapeado = toProduct(data, appid, maxScreenshots);
+  // RATING OFICIAL DE STEAM (/appreviews). Va aparte del detalle a propósito:
+  // si este request falla o te limitan, el juego se importa igual con todos sus
+  // datos y queda SIN puntuar. Perder el rating es mucho mejor que perder el
+  // juego entero por un endpoint que se bloquea con pocas requests seguidas.
+  let reviews = null;
+  try {
+    reviews = await client.appReviews(appid);
+  } catch (err) {
+    console.warn(`[sync] rating de ${appid} no se pudo leer: ${err.message}`);
+  }
+
+  const mapeado = toProduct(data, appid, maxScreenshots, reviews);
   const existente = await Products.findOne({ where: { steam_appid: mapeado.steam_appid } });
 
   // Campos que el sync puede pisar. `price` NO está en la lista a propósito.
@@ -267,6 +278,15 @@ async function sincronizarUnJuego(appid, { maxScreenshots = 5, M = modelos(), ta
     // `rating` llega en 0 cuando la fuente no lo trae. Meter un 0 arriba
     // borraría el valor cargado a mano, así que sólo se escribe cuando hay dato.
     ...(mapeado.rating > 0 ? { rating: mapeado.rating } : {}),
+    // Rating oficial de Steam. Sólo se escribe si el request funcionó: si vino
+    // null (juego sin reseñas) se deja el valor anterior en vez de borrarlo.
+    ...(mapeado.steam_rating_score != null
+      ? {
+          steam_rating_score: mapeado.steam_rating_score,
+          steam_rating_desc: mapeado.steam_rating_desc,
+          steam_rating_reviews: mapeado.steam_rating_reviews,
+        }
+      : {}),
     metacriticRating: mapeado.metacriticRating,
     background_image: mapeado.background_image || DEFAULT_COVER,
     released: mapeado.released,
@@ -432,7 +452,7 @@ async function syncOfertas({ soloEnOferta = false } = {}) {
         const po = data.price_overview || {};
         const descuento = po.discount_percent || 0;
 
-        await producto.update({
+        const campos = {
           steam_price_currency: po.currency || null,
           steam_price_original: po.initial ? Math.round(po.initial) : null,
           steam_price_final: po.final ? Math.round(po.final) : null,
@@ -442,7 +462,24 @@ async function syncOfertas({ soloEnOferta = false } = {}) {
           isFree: data.is_free === true,
           background_image: data.header_image || producto.background_image,
           last_synced_at: new Date(),
-        });
+        };
+
+        // RATING junto al precio: es lo otro que cambia seguido, y la corrida
+        // de ofertas (cada 12 h) ya está pagándole el costo a Steam por juego.
+        // Se refresca sólo si el request éxito: si te limitan, el precio se
+        // guarda igual y el rating queda como estaba.
+        try {
+          const reviews = await client.appReviews(producto.steam_appid);
+          if (reviews && reviews.score != null) {
+            campos.steam_rating_score = reviews.score;
+            campos.steam_rating_desc = reviews.desc;
+            campos.steam_rating_reviews = reviews.reviews;
+          }
+        } catch (err) {
+          console.warn(`[sync] ${producto.steam_appid}: rating no actualizado (${err.message})`);
+        }
+
+        await producto.update(campos);
         actualizados++;
       } catch (err) {
         omitidos++;

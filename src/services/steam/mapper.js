@@ -116,7 +116,7 @@ function mapearGeneros(genres = []) {
  * @param {string|number} appid
  * @param {number} [maxScreenshots=5]
  */
-function toProduct(d, appid, maxScreenshots = 5) {
+function toProduct(d, appid, maxScreenshots = 5, reviews = null) {
   const nombre = d.name || `Steam ${appid}`;
   const descripcion = limpiarHtml(d.short_description || d.about_the_game || '') || 'Sin descripción.';
   const precio = d.price_overview || {};
@@ -126,13 +126,18 @@ function toProduct(d, appid, maxScreenshots = 5) {
     name: nombre,
     slug: slugify(nombre),
     description: descripcion.slice(0, 2000),
-    // Rating: Steam no publica un puntaje 0-100 (su endpoint de reviews es otro
-    // y cuesta una request extra por juego), así que se usa Metacritic cuando
-    // existe y 0 (= "sin dato") cuando no. Antes se usaba la cantidad de
-    // recomendaciones, que es un contador de ventas y dejaba 100 en todos los
-    // juegos: information, pero inútil. Si más adelante querés el puntaje real,
-    // el endpoint es /appreviews/<appid>?json=1 (total_positive/total_reviews).
+    // `rating` es el campo LEGACY en escala 0-100 (herencia del proyecto
+    // original con RAWG). Steam no publica nada en esa escala, así que queda en
+    // 0 = "sin dato". El puntaje que el catálogo muestra sale de las columnas
+    // steam_rating_* de abajo, que sí son de Steam.
     rating: 0,
+    // Rating OFICIAL de Steam (columnas de la migración 002). Viene de
+    // /appreviews/<appid>?json=1 y llega en `reviews` (ver syncService).
+    // score es 0-10; null cuando el juego todavía no tiene reseñas, que NO es
+    // lo mismo que "0 estrellas".
+    steam_rating_score: reviews && reviews.score != null ? Number(reviews.score) : null,
+    steam_rating_desc: (reviews && reviews.desc) || '',
+    steam_rating_reviews: (reviews && reviews.reviews) || 0,
     metacriticRating: d.metacritic ? d.metacritic.score : 0,
     esrb_rating: 'Rating Pending', // Steam no tiene ESRB
     background_image: d.header_image || DEFAULT_COVER,

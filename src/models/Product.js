@@ -122,6 +122,27 @@ module.exports = (sequelize) => {
       type: DataTypes.DATE,
       allowNull: true,
     },
+    // ── Rating oficial de Steam (migración 002) ────────────────────────────────
+    // Steam publica el puntaje de sus propios usuarios sin API key ni 2FA en
+    // /appreviews/<appid>?json=1. Va en columnas PROPIAS a propósito: el campo
+    // `rating` de arriba quedó en escala 0-100 por herencia de RAWG (y en 0 para
+    // lo importado de Steam, porque no había fuente), así que el catálogo lee
+    // estas columnas y `rating` queda solo para el panel admin.
+    //   steam_rating_score    → review_score de Steam, 0-10 (null = sin reseñas)
+    //   steam_rating_desc     → veredicto textual ("Very Positive", "Mixed"…)
+    //   steam_rating_reviews  → cuántas reseñas hay atrás del score
+    steam_rating_score: {
+      type: DataTypes.FLOAT,
+      allowNull: true,
+    },
+    steam_rating_desc: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    steam_rating_reviews: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
     // createdDb: {
     //   type: DataTypes.BOOLEAN,
     //   defaultValue: false,      

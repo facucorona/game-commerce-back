@@ -135,6 +135,57 @@ async function steamGetJson(url) {
 }
 
 /**
+ * PUNTUACIÓN DE LOS USUARIOS DE STEAM (rating oficial).
+ * ----------------------------------------------------------------------------
+ * Steam calcula un puntaje de sus propios compradores y lo publica sin API key:
+ *   /appreviews/<appid>?json=1&language=all&purchase_type=all
+ * Devuelve `query_summary` con:
+ *   review_score      → 0-10 (entero, el que muestra Steam en la ficha)
+ *   review_score_desc → veredicto textual ("Overwhelmingly Positive", "Mixed"…)
+ *   total_positive / total_negative / total_reviews → el detalle del cálculo
+ *
+ * Es la MISMA cola de rate limit que el resto (steamGetJson), y no es opcional:
+ * este endpoint se bloquea MUCHO antes que los demás. Con 3-4 requests seguidas
+ * responde 200 con `{"success": 8}` y ningún dato — esa es la señal de throttle,
+ * no un juego sin reseñas. Por eso va por steamGetJson y se valida `success`.
+ *
+ * Ojo: NO se confunde `success: 8` (throttle, reintentable) con un juego que
+ * realmente no tiene reseñas. En el segundo caso Steam responde `success: true`
+ * con `total_reviews: 0`, y ahí sí el juego queda sin puntuar.
+ *
+ * @param {string|number} appid
+ * @returns {Promise<{score:number|null, desc:string, reviews:number}>}
+ */
+async function appReviews(appid) {
+  const url =
+    `https://store.steampowered.com/appreviews/${appid}` +
+    `?json=1&language=all&purchase_type=all`;
+  const data = await steamGetJson(url);
+
+  // success: 8 = throttle. Se trata como rate limit (congelar + reintentar)
+  // para no seguir insistiendo y empeorar el bloqueo.
+  if (data.success === 8) {
+    congelar('appreviews devolvió success:8 (throttle)');
+    throw errorRateLimit('Steam limitó /appreviews (success: 8)');
+  }
+
+  const q = (data && data.query_summary) || {};
+  const total = Number(q.total_reviews) || 0;
+
+  // Sin reseñas NO es un error: el juego queda sin puntuar y el front lo muestra
+  // como "sin puntuar" en vez de 0 estrellas mudas.
+  if (!q.review_score || total === 0) {
+    return { score: null, desc: '', reviews: 0 };
+  }
+
+  return {
+    score: Number(q.review_score),
+    desc: String(q.review_score_desc || ''),
+    reviews: total,
+  };
+}
+
+/**
  * Detalle de UN juego.
  * @returns {object|null} datos del juego, o null si no existe / no tiene detalle.
  */
@@ -263,6 +314,7 @@ async function steamSpyPage(page = 0) {
 
 module.exports = {
   appDetails,
+  appReviews,
   searchPage,
   buscarAppidPorNombre,
   featured,
