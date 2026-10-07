@@ -1,0 +1,18 @@
+# modules
+node_modules
+
+# package.json
+package-lock.json
+
+# .env
+.env
+
+# respaldos de la base (ver SYNC_STEAM.md §8): son binarios y pesan
+backups/
+*.dump
+# logs locales de desarrollo
+*.log
+# skills de harness instaladas por error en esta carpeta (van en ~/.agents, ~/.claude)
+.agents/
+.claude/
+skills-lock.json
