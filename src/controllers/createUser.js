@@ -2,7 +2,12 @@
 const Router = require('express');
 const router = Router();
 
-const bcrypt = require('bcrypt');
+// bcryptjs (JS puro) en lugar de bcrypt (nativo, node-gyp). El nativo
+// necesita compilar en la máquina, y en Vercel sus scripts de instalación
+// están bloqueados: el install se cortaba y el API terminaba sin `pg` en el
+// bundle. Mismo algoritmo y mismo formato de hash ($2b$...), así que los
+// usuarios que ya tenían contraseña siguen entrando sin rehashear nada.
+const bcrypt = require('bcryptjs');
 
 const { Users } = require('../db.js');
 const { validateUserRegister } = require('./helpers/signupHelper.js');

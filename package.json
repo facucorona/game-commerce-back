@@ -6,7 +6,8 @@
   "scripts": {
     "start": "nodemon -L",
     "test": "mocha -w ./tests/**/*.spec.js",
-    "db:migrate": "node scripts/migrate.js"
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed-users": "node scripts/seedUsers.js"
   },
   "author": "Henry",
   "license": "ISC",
@@ -18,7 +19,7 @@
     "@neon/config": "^1.8.6",
     "@neon/env": "^1.5.3",
     "axios": "^0.27.2",
-    "bcrypt": "^5.0.1",
+    "bcryptjs": "^2.4.3",
     "big-integer": "^1.6.51",
     "body-parser": "^1.19.0",
     "consolidate": "^0.16.0",
@@ -28,10 +29,7 @@
     "ejs": "^3.1.8",
     "express": "^4.18.1",
     "express-session": "^1.17.3",
-    "html-pdf": "^3.0.1",
-    "ioredis": "^4.19.2",
     "jsonwebtoken": "^8.5.1",
-    "jspdf": "^2.5.1",
     "mercadopago": "^1.5.14",
     "morgan": "^1.10.0",
     "nodemailer": "^6.7.8",

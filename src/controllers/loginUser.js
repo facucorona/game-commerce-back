@@ -1,6 +1,8 @@
 const { Router } = require('express');
 const passport = require('passport');
-const bcrypt = require('bcrypt')
+// bcryptjs (JS puro) en vez de bcrypt (nativo). Ver la nota en createUser.js:
+// mismo formato de hash, pero sin node-gyp — que en Vercel no compila.
+const bcrypt = require('bcryptjs')
 const LocalStrategy = require('passport-local').Strategy;
 
 const JWTStrategy = require('passport-jwt').Strategy
