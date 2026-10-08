@@ -1,8 +1,11 @@
 # modules
 node_modules
 
-# package.json
-package-lock.json
+# package-lock.json SÍ se versiona (está comentado a propósito).
+# Sin el lock, Vercel resuelve dependencias desde cero en cada build y no lo
+# puede hacer bien: deployó sequelize con un `pg` incompatible y el API tiraba
+# "Please install pg package manually" en TODAS las requests.
+# Ojo: si tocás package.json, regenerá el lock antes de pushear.
 
 # .env
 .env
@@ -21,3 +24,6 @@ backups/
 .claude/
 skills-lock.json
 .neon
+
+.vercel
+.env*
