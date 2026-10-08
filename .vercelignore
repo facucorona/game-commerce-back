@@ -1,0 +1,15 @@
+# Vercel infiltra el upload con este archivo. Sin él, el CLI sube el
+# node_modules LOCAL de la máquina en lugar de dejar que Vercel instale desde
+# el package-lock.json: las dependencias quedaban como estaban en tu disco y
+# pg no llegaba al bundle (la API tiraba "Please install pg package manually"
+# en todas las requests).
+node_modules
+.env
+.env.neon
+.env*.local
+.git
+.github
+backups
+tests
+*.log
+*.dump
