@@ -2,7 +2,9 @@ const Router = require('express');
 const router = Router();
 const { Products, Platforms, Genre, Screenshots, UsedPlatforms, UsedGenre, steamSync } = require('../db');
 const {Op} = require('sequelize');
-const axios = require('axios');
+// (axios se usaba solo en el endpoint muerto GET /add_api, que pegaba a RAWG:
+// se eliminó junto con él. Si algún endpoint futuro necesita HTTP saliente,
+// el cliente con rate limit vive en services/steam/client.js.)
 
 
 router.get("/", async (req, res)=>{
@@ -53,23 +55,24 @@ router.get("/", async (req, res)=>{
 })
 
 router.get("/:id", async (req, res)=>{
-    try{ 
+    try{
+        // Ficha por id UUID de Products. Antes había una rama que buscaba por
+        // `id_api` (id numérico de RAWG) cuando el id era numérico; se eliminó
+        // con el resto del código muerto de RAWG: ningún juego de Steam tiene
+        // id_api y esa rama siempre devolvía 404.
         let {id} = req.params
-        if (isNaN(id)) {
-            var details = await Products.findOne({
-                where: { id: id },
-                include:[{model: Genre, attributes: ['name'], through: { attributes: [] }},
-                        {model: Platforms, attributes: ['name'], through: { attributes: [] }},
-                        {model: Screenshots, attributes: ['image'], through: { attributes: [] }}]
-            });   
-        }else{
-            var details = await Products.findOne({
-                where: { id_api: id },
-                include:[{model: Genre, attributes: ['name'], through: { attributes: [] }},
-                        {model: Platforms, attributes: ['name'], through: { attributes: [] }},
-                        {model: Screenshots, attributes: ['image'], through: { attributes: [] }}]         
-            });
+        // Guarda: Postgres tira error si se busca un UUID con texto que no es
+        // UUID ("invalid input syntax"), y el catch lo convertía en un 401
+        // confuso. Lo que no parece UUID es 404 directo.
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+            return res.status(404).send('Product does not exist');
         }
+        var details = await Products.findOne({
+            where: { id: id },
+            include:[{model: Genre, attributes: ['name'], through: { attributes: [] }},
+                    {model: Platforms, attributes: ['name'], through: { attributes: [] }},
+                    {model: Screenshots, attributes: ['image'], through: { attributes: [] }}]
+        });
         if (!details) {
             res.status(404).send(details);
         }else{
@@ -197,88 +200,5 @@ router.post("/create", async (req,res)=>{
         res.status(401).send("Error. Complete the missing fields!.")
     };
 });
-
-router.get("/add_api/:id", async (req, res)=>{
-    try{ 
-        let {id} = req.params
-        let product = await Products.findAll({ where: { id_api: id } });
-        if(product.length === 0){
-            let game = await axios.get(`https://api.rawg.io/api/games/${id}?key=${process.env.API_KEY}`);
-            game = game.data;
-            let esrb = game.esrb_rating;
-            if (esrb === null){
-                esrb = "Not rated";
-            } else { esrb = game.esrb_rating.name }
-            console.log(esrb)
-
-            let requirements = game.requirements_en;
-            if (!requirements){
-                requirements = {}
-                requirements.recommended = 'No requirements'
-                requirements.minimum = 'No requirements'
-            }
-
-            let screenshots_data = await axios.get(`https://api.rawg.io/api/games/${game.id}/screenshots?key=${process.env.API_KEY}`);
-            let screenshots = screenshots_data.data.results;
-
-            screenshots.forEach( async (e) => {
-                await Screenshots.findOrCreate({
-                    where:{  
-                        image: e.image
-                    }
-                });
-            })
-            
-            game.ratings = Math.round(((Math.random() * (87 - 1)+1)))+1
-
-            let  dbProduct = await Products.create({                               
-                id_api: game.id,
-                name: game.name,
-                description: game.description_raw,
-                rating: game.ratings,
-                esrb_rating: esrb,
-                background_image: game.background_image,
-                released: game.released,
-                requeriments_recomended: requirements.recommended,
-                requeriments_min: requirements.minimum,
-                price: Math.round(((Math.random() * ((70 - 1)+1))*100)/100),
-                slug: game.slug,
-                metacriticRating: game.metacritic,
-                isDisabled: false,
-            });
-
-            screenshots.forEach(async (e) => {
-                var screenDb = await Screenshots.findAll({ where: { image: e.image }});
-                dbProduct.addScreenshots(screenDb);
-            });
-            
-            
-            game.genres.forEach(async (g) => {
-                let find = await UsedGenre.findOrCreate({
-                    where: { name: g.name },
-                });
-                var genreDb = await Genre.findAll({ where: { name:g.name } });
-                await dbProduct.addGenre(genreDb);
-            });
-            
-            game.platforms.forEach(async (p) => {
-                let find = await UsedPlatforms.findOrCreate({
-                    where: { name: p.platform.name },
-                });
-                var platformDb = await Platforms.findAll({ where: { name:p.platform.name } });
-                await dbProduct.addPlatforms(platformDb);
-            });
-            
-            res.status(200).send(dbProduct);
-        }else{
-            res.status(405).send('Game already in DB');
-        }
-
-    }catch(err){
-        console.log(err);
-        res.status(401).send(err);
-    }
-})
-
 
 module.exports = router;

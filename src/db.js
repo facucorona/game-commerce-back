@@ -2,10 +2,8 @@ require('dotenv').config();
 const { Sequelize } = require('sequelize');
 const fs = require('fs');
 const path = require('path');
-const getApiGames = require('./services/getApiGames');
-const getApiPlatforms = require('./services/getApiPlatforms');
-const getApiGenres = require('./services/getApiGenres');
-// Sincronizador de Steam: reemplaza a RAWG como fuente del catálogo.
+// Steam es la única fuente del catálogo (los servicios de RAWG se eliminaron:
+// la API murió y el endpoint add_api que los usaba fallaba siempre).
 const steamSync = require('./services/steam/syncService');
 const {
   DB_USER, DB_PASSWORD, DB_HOST, DB_NAME
@@ -89,19 +87,17 @@ console.log('Relations created')
 /*
  * SEMILLA DEL CATÁLOGO
  * ------------------------------------------------------------------
- * Antes: si la tabla estaba vacía, se seeded con RAWG (services/getApiGames).
- * Hoy RAWG no sirve sin API key, así que la fuente pasa a ser Steam.
+ * Si la tabla está vacía, se siembra desde Steam (única fuente: los servicios
+ * de RAWG se eliminaron porque la API murió).
  *
  * Se elige con DB_SEED:
  *   'steam' → importa desde Steam (sin key, con precios reales por región)
- *   'rawg'  → comportamiento anterior (necesita API_KEY)
  *   'none'  → no siembra nada (útil si vas a cargar todo a mano)
  *
- * Si no se define DB_SEED, se decide solo: con API_KEY se mantiene RAWG; sin
- * API_KEY (el caso actual) se usa Steam. El bloque corre igual dentro del
- * try/catch, así que una fuente caída no impide levantar el server.
+ * Default: 'steam'. El bloque corre dentro del try/catch, así que una fuente
+ * caída no impide levantar el server.
  */
-const DB_SEED = process.env.DB_SEED || (process.env.API_KEY ? 'rawg' : 'steam');
+const DB_SEED = process.env.DB_SEED || 'steam';
 
 /*
  * NOTA DE ARRANQUE
@@ -136,8 +132,7 @@ async function semillaSiEstaVacia() {
 
     if (DB_SEED === 'steam') {
       console.log(`Cargando catálogo inicial desde Steam (${Number(process.env.STEAM_CATALOG_LIMIT || 200)} juegos)...`);
-      // Steam ya trae plataformas y géneros en el detalle de cada juego, así que
-      // no hacen falta los servicios sueltos de RAWG: sólo el catálogo.
+      // Steam ya trae plataformas y géneros en el detalle de cada juego.
       await steamSync.syncCatalogo({
         limit: Number(process.env.STEAM_CATALOG_LIMIT || 200),
         maxScreenshots: Number(process.env.STEAM_MAX_SCREENSHOTS || 5),
@@ -145,9 +140,7 @@ async function semillaSiEstaVacia() {
       return;
     }
 
-    await getApiPlatforms(Platforms);
-    await getApiGenres(Genre);
-    await getApiGames(Products, Platforms, Genre, Screenshots, UsedGenre, UsedPlatforms);
+    console.log(`DB_SEED='${DB_SEED}' no reconocido: se deja la tabla como está (opciones: steam, none)`);
   } catch (err) {
     console.log(err);
     console.log('error on load db');

@@ -19,13 +19,12 @@ Base local: `videogames` (usuario/clave `postgres/postgres`, ver `DB_*` abajo).
 | Var | Ejemplo | Para qué |
 |---|---|---|
 | `DB_USER` / `DB_PASSWORD` / `DB_HOST` / `DB_NAME` | `postgres/postgres/localhost/videogames` | Conexión Sequelize |
-| `DB_SEED` | `steam` | Siembra inicial: `steam` (defecto sin `API_KEY`), `rawg` (legacy con `API_KEY`), `none` (tabla vacía) |
+| `DB_SEED` | `steam` | Siembra inicial: `steam` (catálogo desde Steam) o `none` (tabla vacía) |
 | `KEY_SECRET` | (secreto largo) | Firma del JWT |
 | `URL_ALLOWED` | `http://localhost:3000` | Links de restore/checkout hacia el front |
 | `URL` | `http://localhost:3001/` | Base pública del API (links PayPal) |
 | `ACCESS_TOKEN` | (token MP) | Opcional: sin él, `/payment` responde **503** (checkout desactivado, no tira el server) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | Opcional: sin ellas, login con Google desactivado |
-| `API_KEY` | — | Legacy RAWG (ya no se usa; sin ella el seed defaultea a Steam) |
 | `STEAM_*` | ver tabla abajo | Sincronizador de Steam |
 
 ## Auth
