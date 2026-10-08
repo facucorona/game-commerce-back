@@ -16,3 +16,4 @@ backups/
 .agents/
 .claude/
 skills-lock.json
+.neon
