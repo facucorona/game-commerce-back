@@ -9,35 +9,61 @@ const {
   DB_USER, DB_PASSWORD, DB_HOST, DB_NAME
 } = process.env;
 
+/*
+ * CONEXIÓN
+ * ----------------------------------------------------------------------------
+ * Prioridad: si hay DATABASE_URL se usa esa, y se ignoran DB_*.
+ *
+ * ¿Por qué? Porque es lo que entrega Neon (`neon env pull`) y lo que Vercel
+ * inyecta como variable de entorno, y porque armar el URL ya trae el modo SSL
+ * correcto por región: en Neon el pooled termina en `-pooler` y el unpooled
+ * no. Armar la conexión a mano desde DB_* obligaba a adivinar el modo y por
+ * qué lado (además el nombre de la base en Neon es `neondb`, no `videogames`).
+ *
+ * El bloque con DB_* se conserva como fallback para el Postgres local: si
+ * alguien clonea el repo sin configurar DATABASE_URL, sigue levantando con las
+ * variables clásicas.
+ */
+const DATABASE_URL = process.env.DATABASE_URL;
 
-let sequelize =
-  process.env.NODE_ENV === "production"
-    ? new Sequelize({
-        database: DB_NAME,
-        dialect: "postgres",
-        host: DB_HOST,
-        port: 5432,
-        username: DB_USER,
-        password: DB_PASSWORD,
-        pool: {
-          max: 3,
-          min: 1,
-          idle: 10000,
+const sequelize = DATABASE_URL
+  ? new Sequelize(DATABASE_URL, {
+      // Pool chico a propósito: en serverless las conexiones mueren con la
+      // función, y abrir de más agota los slots del pooler de Neon.
+      pool: { max: 3, min: 0, idle: 10000 },
+      dialectOptions: {
+        ssl: {
+          require: true,
+          // Ref.: https://github.com/brianc/node-postgres/issues/2009
+          rejectUnauthorized: false,
         },
-        dialectOptions: {
-          ssl: {
-            require: true,
-            // Ref.: https://github.com/brianc/node-postgres/issues/2009
-            rejectUnauthorized: false,
-          },
-          keepAlive: true,
-        },
-        ssl: true,
-      })
-    : new Sequelize(
-        `postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/videogames`,
-        { logging: false, native: false }
-      );
+        keepAlive: true,
+      },
+      logging: false,
+      native: false,
+    })
+  : new Sequelize(
+      process.env.NODE_ENV === "production"
+        ? {
+            database: DB_NAME,
+            dialect: "postgres",
+            host: DB_HOST,
+            port: 5432,
+            username: DB_USER,
+            password: DB_PASSWORD,
+            pool: { max: 3, min: 1, idle: 10000 },
+            dialectOptions: {
+              ssl: {
+                require: true,
+                rejectUnauthorized: false,
+              },
+              keepAlive: true,
+            },
+            ssl: true,
+          }
+        : `postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}/videogames`,
+      { logging: false, native: false }
+    );
       
 /*const sequelize = new Sequelize(`postgres://${DB_USER}:${DB_PASSWORD}@localhost/videogames`, {
   logging: false, // set to console.log to see the raw SQL queries

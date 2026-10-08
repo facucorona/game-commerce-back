@@ -6,6 +6,10 @@ package-lock.json
 
 # .env
 .env
+# .env.neon: credenciales de la base de Neon (produce `neon env pull`).
+# NUNCA versionar: trae el password del owner.
+.env.neon
+.env*.local
 
 # respaldos de la base (ver SYNC_STEAM.md §8): son binarios y pesan
 backups/
