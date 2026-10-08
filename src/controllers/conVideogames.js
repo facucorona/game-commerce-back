@@ -1,6 +1,6 @@
 const Router = require('express');
 const router = Router();
-const { Products, Platforms, Genre, Screenshots, UsedPlatforms, UsedGenre } = require('../db');
+const { Products, Platforms, Genre, Screenshots, UsedPlatforms, UsedGenre, steamSync } = require('../db');
 const {Op} = require('sequelize');
 const axios = require('axios');
 
@@ -27,7 +27,19 @@ router.get("/", async (req, res)=>{
 
             res.status(200).send(fetchDbName);
 
-        }else{     
+        }else{
+            // TRIGGER POR VISITA (reemplaza al scheduler en serverless): si el
+            // catálogo lleva +24 h u ofertas +6 h sin refrescarse, lanza un sync
+            // incremental EN SEGUNDO PLANO. No se espera: la respuesta sale con
+            // lo que hay en la base y el sync escribe para la próxima visita.
+            // Solo en esta rama (carga de home), no en las búsquedas con ?name=.
+            // Ventanas y topes por env (ver README del API).
+            steamSync.syncAlEntrar({
+                minHorasCatalogo: Number(process.env.SYNC_CATALOG_HOURS || 24),
+                minHorasOfertas: Number(process.env.SYNC_OFFERS_HOURS || 6),
+                topeCatalogo: Number(process.env.SYNC_TOP_CATALOG || 6),
+                topeOfertas: Number(process.env.SYNC_TOP_OFFERS || 12),
+            }).catch(() => {});
             var dbAll = await Products.findAll({
                 include:[{model: Genre, attributes: ['name'], through: { attributes: [] }},
                         {model: Platforms, attributes: ['name'], through: { attributes: [] }}]

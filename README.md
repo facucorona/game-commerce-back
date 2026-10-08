@@ -72,10 +72,23 @@ Detalle largo del "scrap": `./SYNC_STEAM.md`. Contexto de producto: `./PRODUCT.m
 | `STEAM_RATE_LIMIT_PAUSE_MS` | `45000` | Pausa global ante HTML de Steam |
 | `STEAM_OFFERS_EVERY` / `STEAM_CATALOG_EVERY` / `STEAM_FULL_EVERY` | `12h` / `1d` / `1w` | Frecuencias (`12h`, `1d`, `1w`, `30m`…) |
 | `STEAM_CATALOG_LIMIT` / `STEAM_MAX_SCREENSHOTS` | `200` / `5` | Tamaño de corrida y capturas por juego |
+| `STEAM_LOCK_TTL_MIN` | `15` | TTL del lock `running` en `SyncRuns` (instancias muertas) |
+| `SYNC_CATALOG_HOURS` / `SYNC_OFFERS_HOURS` | `24` / `6` | Ventanas del trigger por visita |
+| `SYNC_TOP_CATALOG` / `SYNC_TOP_OFFERS` | `6` / `12` | Juegos por visita (entran en el timeout serverless) |
 | `STEAM_APPIDS` | — | Lista manual fija (bypasea relevamiento) |
 | `STEAM_DISCOVERY` | — | `none` desactiva SteamSpy |
 | `STEAM_PRECIO_EQUIVALENCIA` | activo | `false` = en altas no propone precio Steam |
 | `STEAM_APPID_CACHE` | `appids-cache.json` | Caché local de appids relevados |
+
+## Deploy en Vercel (serverless)
+
+El backend es un servidor Express clásico, pero funciona en Vercel con tres adaptaciones (ya hechas):
+
+1. **Handler**: `api/index.js` exporta la app (`src/app.js` ya hace `module.exports = server`) y `vercel.json` rewritea todo ahí. `index.js` (con `listen()`) no corre en serverless.
+2. **Trigger por visita en vez de scheduler**: `GET /videogames` dispara `syncAlEntrar()` sin esperar. Catálogo viejo de +24 h → refresca los 6 más antiguos; ofertas viejas de +6 h → refresca 12. El lock vive en `SyncRuns` (no en memoria) con TTL de 15 min. `STEAM_SYNC_ENABLED` queda en `false`.
+3. **Bootstrap manual de la DB**: `conn.sync()`, migraciones y semilla no corren solos. Una vez contra la DB de producción: `npm run db:migrate` (idempotente, se repite sin riesgo).
+
+Env de producción en Vercel: `DB_HOST/DB_USER/DB_PASSWORD/DB_NAME` (Neon), `KEY_SECRET` y `SECRET_KEY` nuevos, `URL_ALLOWED` = URL del front, `URL` = URL del API con barra final, `NODE_ENV=production`, `STEAM_SYNC_ENABLED=false`. El caché de appids va a `/tmp` solo (filesystem de solo lectura).
 
 ## Estructura
 
@@ -86,4 +99,7 @@ src/
   routes/index.js # mapa de rutas
   controllers/    # uno por recurso (+ conSteamSync, loginUser, payment…)
   services/steam/ # sincronizador (arriba)
+api/index.js      # handler serverless (Vercel)
+scripts/migrate.js# bootstrap de DB: sync + migraciones + semilla
+vercel.json       # rewrite todo → /api
 ```

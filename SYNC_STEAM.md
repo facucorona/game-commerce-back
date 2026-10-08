@@ -124,6 +124,22 @@ de `setTimeout`, que además no acumula tareas ni deriva):
 Los releventos **quedan apagados en desarrollo**: si no los prendés, cada 12 h le
 estás pidiendo 200 juegos a Steam sin querer.
 
+### Trigger por visita (reemplazo serverless del tablero)
+
+En Vercel no hay proceso vivo: `index.js` no corre, así que el tablero de arriba
+no existe. En su lugar, `GET /videogames` (carga de la home) dispara
+`syncAlEntrar()` **sin esperar la respuesta**:
+
+- Mira la última corrida `ok` de cada tipo en `SyncRuns`.
+- Catálogo viejo de +24 h → refresca los 6 juegos más antiguos (`last_synced_at`).
+- Ofertas viejas de +6 h → refresca precio/descuento/rating de los 12 más antiguos.
+- El lock vive en la base (`status: 'running'` con TTL de 15 min), no en memoria:
+  dos visitas simultáneas no duplican el trabajo. Si una instancia muere a mitad
+  del sync, el lock expira y la próxima visita reintenta.
+
+Topes chicos a propósito: 12 ofertas × 2 requests × 600 ms ≈ 15 s, dentro del
+timeout serverless. Con el uso, el catálogo entero se va refrescando solo.
+
 ---
 
 ## 6. Variables de entorno
@@ -143,6 +159,10 @@ Todas están en `.env`, comentadas. Las que importan:
 | `STEAM_MAX_SCREENSHOTS` | `5` | Capturas por juego. |
 | `STEAM_PRECIO_EQUIVALENCIA` | `true` | Si el alta propone el precio de Steam o deja 0. |
 | `STEAM_DEBUG_STACK` | — | `true` imprime el stack completo de cada error del sync. |
+| `STEAM_LOCK_TTL_MIN` | `15` | Cuánto dura el lock `running` antes de considerarse huérfano (instancia muerta). |
+| `SYNC_CATALOG_HOURS` / `SYNC_OFFERS_HOURS` | `24` / `6` | Ventanas del trigger por visita en `GET /videogames`. |
+| `SYNC_TOP_CATALOG` / `SYNC_TOP_OFFERS` | `6` / `12` | Cuántos juegos refresca cada visita. |
+| `STEAM_APPID_CACHE` | local / `/tmp` en Vercel | Caché de appids (en Vercel va a `/tmp`, se pierde entre invocaciones). |
 
 ---
 
@@ -155,8 +175,11 @@ src/services/steam/syncService.js   upsert por steam_appid, catálogo, ofertas, 
 src/services/steam/scheduler.js     tablero con setTimeout (sin dependencias)
 src/services/steam/appids-cache.json  caché local de ids relevados
 src/controllers/conSteamSync.js     endpoints admin
-src/models/SyncRun.js               bitácora de corridas
+src/models/SyncRun.js               bitácora de corridas (también es el lock distribuido)
 src/migrations/001_steam_sync.js    columnas nuevas (idempotente, corre en cada boot)
+src/migrations/002_steam_rating.js  columnas del rating oficial (score 0-10 + veredicto)
+api/index.js                        handler serverless para Vercel (exporta la app Express)
+scripts/migrate.js                  bootstrap de DB para serverless (`npm run db:migrate`, una vez)
 ```
 
 La migración corre sola en cada arranque: `conn.sync()` crea tablas pero **no

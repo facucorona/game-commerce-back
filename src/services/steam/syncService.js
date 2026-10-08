@@ -27,7 +27,11 @@ const { toProduct, hashTexto, DEFAULT_COVER } = require('./mapper');
 // Caché local de appids relevados. Sirve para no depender de que Steam no nos
 // esté cortando el buscador, y para no pegarle al catálogo en cada corrida (los
 // appid se agregan lento: los más vendidos no cambian cada semana).
-const CACHE_PATH = process.env.STEAM_APPID_CACHE || path.join(__dirname, 'appids-cache.json');
+// En Vercel el filesystem es de solo lectura fuera de /tmp, así que ahí el
+// default es /tmp (se pierde entre invocaciones, pero con el trigger por visita
+// casi no se usa: solo en la primerísima carga).
+const CACHE_PATH = process.env.STEAM_APPID_CACHE
+  || (process.env.VERCEL ? '/tmp/appids-cache.json' : path.join(__dirname, 'appids-cache.json'));
 
 let db = null;
 function setDB(mod) {
@@ -47,10 +51,45 @@ function modelos() {
   };
 }
 
-// Un solo sync a la vez (protege contra el tablero + un click manual simultáneos)
+// Un solo sync a la vez… EN ESTE PROCESO. En serverless (Vercel) cada request
+// es un proceso nuevo, así que esta variable no bloquea nada entre
+// invocaciones: es solo un atajo barato para no pegarle a la base. El lock de
+// verdad está en SyncRuns (ver tomarLock): si dos instancias disparan a la vez,
+// la segunda ve la fila 'running' de la primera y aborta.
 let corriendo = false;
 function estaCorriendo() {
   return corriendo;
+}
+
+// Cuánto dura un lock 'running' antes de considerarse huérfano. En serverless
+// la función puede morir a mitad del sync y la fila queda en 'running' para
+// siempre: sin TTL, un sync cortado bloquearía todos los siguientes.
+const LOCK_TTL_MIN = Number(process.env.STEAM_LOCK_TTL_MIN || 15);
+
+/**
+ * Lock distribuido sobre SyncRuns.
+ * Crea la fila 'running' y después cuenta cuántas hay del mismo tipo dentro
+ * del TTL (incluida la propia). Si hay más de una, otra instancia ganó la
+ * carrera: se marca la propia como abortada y se devuelve null.
+ *
+ * No es atómico al 100% (dos procesos pueden pasar el conteo a la vez), pero
+ * el upsert por steam_appid es idempotente: lo peor que pasa es un sync doble,
+ * nunca datos corruptos.
+ *
+ * @returns {Promise<object|null>} la fila SyncRun si se ganó el lock
+ */
+async function tomarLock(tipo) {
+  const M = modelos();
+  const run = await M.SyncRun.create({ type: tipo, status: 'running' });
+  const desde = new Date(Date.now() - LOCK_TTL_MIN * 60 * 1000);
+  const enCurso = await M.SyncRun.count({
+    where: { type: tipo, status: 'running', started_at: { [Op.gt]: desde } },
+  });
+  if (enCurso > 1) {
+    await run.update({ status: 'error', finished_at: new Date(), detail: 'abortado: otra instancia tiene el lock' });
+    return null;
+  }
+  return run;
 }
 
 // ------------------------------------------------------------------ caché
@@ -351,18 +390,34 @@ async function sincronizarUnJuego(appid, { maxScreenshots = 5, M = modelos(), ta
  * @param {number} [opts.maxScreenshots=5]
  * @param {string[]} [opts.appids] lista explícita (tiene prioridad sobre limit)
  */
-async function syncCatalogo({ limit = 200, maxScreenshots = 5, appids: appidsForzados } = {}) {
+async function syncCatalogo({ limit = 200, maxScreenshots = 5, appids: appidsForzados, refrescar = 0, run = null } = {}) {
   const M = modelos();
   const { SyncRun } = M;
   const taxos = await sincronizarTaxonomias(M);
 
-  const run = await SyncRun.create({ type: 'catalog', status: 'running' });
+  // `run` llega del lock de envolver() cuando se llama por la vía pública; si
+  // se llama directo (tests, scripts), se crea acá como antes.
+  if (!run) run = await SyncRun.create({ type: 'catalog', status: 'running' });
   const errores = [];
   const cuenta = { creados: 0, actualizados: 0, omitidos: 0 };
 
   try {
-    const appids = appidsForzados && appidsForzados.length ? appidsForzados : await relevarAppids(limit);
-    console.log(`[sync] catálogo: ${appids.length} appids a procesar`);
+    // MODO INCREMENTAL (trigger por visita): en vez de relevar la tienda (6
+    // búsquedas caras), refresca los N juegos más viejos por last_synced_at.
+    // Es lo que entra en el timeout serverless; con el uso se cubre todo.
+    let appids;
+    if (refrescar > 0) {
+      const viejos = await M.Products.findAll({
+        where: { steam_appid: { [Op.ne]: null } },
+        order: [['last_synced_at', 'ASC NULLS FIRST']],
+        limit: Math.min(Math.max(refrescar, 1), 50),
+      });
+      appids = viejos.map((p) => String(p.steam_appid));
+      console.log(`[sync] catálogo incremental: ${appids.length} más antiguos`);
+    } else {
+      appids = appidsForzados && appidsForzados.length ? appidsForzados : await relevarAppids(limit);
+      console.log(`[sync] catálogo: ${appids.length} appids a procesar`);
+    }
 
     // `sincronizarUnJuego` devuelve el estado en singular ('creado') y los
     // contadores van en plural ('creados'). Sin este mapa se contam en claves
@@ -413,11 +468,12 @@ async function syncCatalogo({ limit = 200, maxScreenshots = 5, appids: appidsFor
  * Sincronización de OFERTAS: refresca precio/descuento de los juegos ya
  * importados. No crea juegos nuevos: sólo actualiza los que tienen steam_appid.
  */
-async function syncOfertas({ soloEnOferta = false } = {}) {
+async function syncOfertas({ soloEnOferta = false, limite = 500, run = null } = {}) {
   const M = modelos();
   const { Products, SyncRun } = M;
 
-  const run = await SyncRun.create({ type: 'offers', status: 'running' });
+  // `run` llega del lock de envolver() cuando se llama por la vía pública.
+  if (!run) run = await SyncRun.create({ type: 'offers', status: 'running' });
   const errores = [];
   let actualizados = 0;
   let omitidos = 0;
@@ -426,8 +482,10 @@ async function syncOfertas({ soloEnOferta = false } = {}) {
     const where = { steam_appid: { [Op.ne]: null } };
     if (soloEnOferta) where.onSale = true;
 
-    // Orden por `last_synced_at`: los más viejos se refrescan primero.
-    const productos = await Products.findAll({ where, limit: 500, order: [['last_synced_at', 'ASC']] });
+    // Orden por `last_synced_at`: los más viejos se refrescan primero. El
+    // `limite` (default 500 = todo) se baja a ~12 en el trigger por visita para
+    // entrar en el timeout serverless: 12 juegos × 2 requests × 600 ms ≈ 15 s.
+    const productos = await Products.findAll({ where, limit: Math.min(Math.max(limite, 1), 500), order: [['last_synced_at', 'ASC']] });
     console.log(`[sync] ofertas: ${productos.length} juegos con steam_appid`);
 
     // Los destacados de Steam traen el vencimiento del descuento sin gastar una
@@ -523,12 +581,13 @@ async function syncOfertas({ soloEnOferta = false } = {}) {
  * @param {number} [opts.limit=100]
  * @param {boolean} [opts.soloSinGenero=true] acotar a los que están sin género
  */
-async function reEtiquetarPorNombre({ limit = 100, soloSinGenero = true } = {}) {
+async function reEtiquetarPorNombre({ limit = 100, soloSinGenero = true, run = null } = {}) {
   const M = modelos();
   const { Products, SyncRun } = M;
   const taxos = await sincronizarTaxonomias(M);
 
-  const run = await SyncRun.create({ type: 'retag', status: 'running' });
+  // `run` llega del lock de envolver() cuando se llama por la vía pública.
+  if (!run) run = await SyncRun.create({ type: 'retag', status: 'running' });
   const errores = [];
   const emparejados = [];
   let sinCoincidencia = 0;
@@ -618,8 +677,17 @@ async function estado({ limite = 10 } = {}) {
     include: [{ model: M.Genre, through: { attributes: [] }, required: true }],
   });
 
+  // Lock real: filas 'running' recientes (cualquiera sea la instancia que las
+  // haya creado). El flag en memoria solo ve este proceso.
+  const enCurso = await M.SyncRun.count({
+    where: {
+      status: 'running',
+      started_at: { [Op.gt]: new Date(Date.now() - LOCK_TTL_MIN * 60 * 1000) },
+    },
+  });
+
   return {
-    corriendo: corriendo,
+    corriendo: enCurso > 0,
     juegosTotales: totalProductos,
     juegosConSteam: totalConSteam,
     juegosEnOferta: enOferta,
@@ -633,12 +701,76 @@ async function estado({ limite = 10 } = {}) {
   };
 }
 
-/** Serializa las corridas: sólo uno a la vez. */
-async function envolver(fn) {
-  if (corriendo) throw new Error('Ya hay una sincronización en curso');
+/**
+ * TRIGGER POR VISITA — reemplazo del scheduler para serverless.
+ * ----------------------------------------------------------------------------
+ * Idea: en vez de un reloj que corre cada 12 h (que en Vercel muere con la
+ * instancia), el freshness lo decide cada visita mirando la última corrida
+ * exitosa en SyncRuns. Si `finished_at` es más viejo que la ventana, se lanza
+ * un sync INCREMENTAL en segundo plano y el request sigue con lo que hay.
+ *
+ * Ventanas por defecto: catálogo 24 h, ofertas 6 h (los descuentos vencen
+ * rápido; el catálogo casi no se mueve en un día).
+ *
+ * Topes chicos a propósito: 12 ofertas × 2 requests × 600 ms ≈ 15 s, que entra
+ * en el timeout serverless. El catálogo se refresca de a 6 por visita y con el
+ * uso se cubre entero (el orden por last_synced_at ya prioriza lo más viejo).
+ *
+ * Nunca rechaza: si la base falla, se loguea y la tienda sigue funcionando.
+ *
+ * @param {object} opts
+ * @param {number} [opts.minHorasCatalogo=24]
+ * @param {number} [opts.minHorasOfertas=6]
+ * @param {number} [opts.topeCatalogo=6]
+ * @param {number} [opts.topeOfertas=12]
+ * @returns {Promise<{disparoCatalogo:boolean, disparoOfertas:boolean}>}
+ */
+async function syncAlEntrar({ minHorasCatalogo = 24, minHorasOfertas = 6, topeCatalogo = 6, topeOfertas = 12 } = {}) {
+  const resultado = { disparoCatalogo: false, disparoOfertas: false };
+  try {
+    const M = modelos();
+    const ahora = Date.now();
+
+    const esVieja = async (tipo, horas) => {
+      const ultima = await M.SyncRun.findOne({
+        where: { type: tipo, status: 'ok' },
+        order: [['finished_at', 'DESC']],
+      });
+      if (!ultima || !ultima.finished_at) return true;
+      return ahora - new Date(ultima.finished_at).getTime() > horas * 3600 * 1000;
+    };
+
+    // Fire-and-forget a propósito: NO se espera. El sync escribe en la base y
+    // el resultado queda para el siguiente request aunque éste muera.
+    // Si otra instancia tiene el lock, envolver() tira y se loguea: no es error.
+    if (await esVieja('catalog', minHorasCatalogo)) {
+      resultado.disparoCatalogo = true;
+      envolver('catalog', (lock) => syncCatalogo({ refrescar: topeCatalogo, maxScreenshots: 0, run: lock }))
+        .catch((err) => console.warn(`[sync] trigger catálogo omitido: ${err.message}`));
+    }
+    if (await esVieja('offers', minHorasOfertas)) {
+      resultado.disparoOfertas = true;
+      envolver('offers', (lock) => syncOfertas({ limite: topeOfertas, run: lock }))
+        .catch((err) => console.warn(`[sync] trigger ofertas omitido: ${err.message}`));
+    }
+  } catch (err) {
+    console.warn('[sync] syncAlEntrar no pudo evaluar ventanas:', err.message);
+  }
+  return resultado;
+}
+
+/**
+ * Serializa las corridas: sólo una a la vez, en este proceso Y entre procesos.
+ * El flag en memoria corta el caso fácil (tablero + click manual local); el
+ * lock en SyncRuns corta el caso serverless (dos invocaciones simultáneas).
+ */
+async function envolver(tipo, fn) {
+  if (corriendo) throw new Error('Ya hay una sincronización en curso (este proceso)');
+  const lock = await tomarLock(tipo);
+  if (!lock) throw new Error('Ya hay una sincronización en curso (otra instancia)');
   corriendo = true;
   try {
-    return await fn();
+    return await fn(lock);
   } finally {
     corriendo = false;
   }
@@ -646,9 +778,10 @@ async function envolver(fn) {
 
 module.exports = {
   setDB,
-  syncCatalogo: (opts) => envolver(() => syncCatalogo(opts)),
-  syncOfertas: (opts) => envolver(() => syncOfertas(opts)),
-  reEtiquetarPorNombre: (opts) => envolver(() => reEtiquetarPorNombre(opts)),
+  syncCatalogo: (opts) => envolver('catalog', (lock) => syncCatalogo({ ...opts, run: lock })),
+  syncOfertas: (opts) => envolver('offers', (lock) => syncOfertas({ ...opts, run: lock })),
+  reEtiquetarPorNombre: (opts) => envolver('retag', (lock) => reEtiquetarPorNombre({ ...opts, run: lock })),
+  syncAlEntrar,
   estado,
   estaCorriendo,
   leerCache,
